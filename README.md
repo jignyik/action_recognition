@@ -1,7 +1,7 @@
 # action_recognition
 Tested on Python 3.9 in a conda enviroment
 
-    git clone https://github.com/jignyik/action_recognition.git
+    git clone https://github.com/jignyik/action_recognition.git .
     cd action_recognition
     opencv-python
     pip install torch torchvision torchaudio
