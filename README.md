@@ -2,8 +2,7 @@
 Tested on Python 3.9 in a conda enviroment
 
     git clone https://github.com/jignyik/action_recognition.git 
-    cd action_recognition
-    opencv-python
+    pip install opencv-python
     pip install torch torchvision torchaudio
     conda install -c conda-forge ninja
     y
