@@ -12,6 +12,9 @@ import onnxruntime
 
 import math
 
+import datetime
+
+
 class PreProcessing:
     def __init__(self):
         self.device = "cpu"
@@ -53,7 +56,7 @@ class PreProcessing:
     @staticmethod
     def load_detectron_config():
         cfg = get_cfg()
-        cfg.merge_from_file(model_zoo.get_config_file("COCO-Detection/faster_rcnn_R_50_FPN_3x.yaml"))
+        cfg.merge_from_file("faster_rcnn_R_50_FPN_3x.yaml")
         cfg.MODEL.ROI_HEADS.SCORE_THRESH_TEST = 0.55  # set threshold for this model
         cfg.MODEL.WEIGHTS = model_zoo.get_checkpoint_url("COCO-Detection/faster_rcnn_R_50_FPN_3x.yaml")
         predictor = DefaultPredictor(cfg)
@@ -192,14 +195,27 @@ class PreProcessing:
     def action_recognition(self, frame):
         self.save_frames(frame)
         if self.check_save_frames():
+            start = datetime.datetime.now()
             slow, fast = self.preprocess(self.saved_frames)
             # chose mid point to extract boxes, can use start of clip / end of clip / any point of the clip
             boxes = self.boxes(self.midframe_resized, resized=True)
+
+            time = datetime.datetime.now() - start
+            print(time.total_seconds())
+
             self.boxes(self.midframe, resized=False)
+
+            time = datetime.datetime.now() - start
+            print(time.total_seconds())
+
             self.clear_frame_space()
             if boxes.size != 0:
                 output = self.session.run([self.output_name], {self.input_name: slow, self.input_name2: fast, self.input_name3: boxes})
                 self.preds = np.array(output[0])
+
+                time = datetime.datetime.now() - start
+                print(time.total_seconds())
+
                 self.result()
 
     def result(self, confidence=0.7):
