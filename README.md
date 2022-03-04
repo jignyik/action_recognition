@@ -10,4 +10,4 @@ Tested on Python 3.9 in a conda enviroment
     python -m pip install -e detectron2
     conda install pywin32
     y
-    pip install onnx    
+    pip install onnxruntime 
