@@ -13,9 +13,9 @@ while cam:
     time = datetime.datetime.now() - start
     if time.total_seconds() > 1:
         pass
-        # print(action.result())
-        # print("Inference Time:")
-        # print(time.total_seconds())
+        print(action.result())
+        print("Inference Time:")
+        print(time.total_seconds())
     cv2.imshow("", action.draw_box_on_frame(frame))
     if cv2.waitKey(1) == 27:
         break

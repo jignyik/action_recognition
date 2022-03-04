@@ -1,18 +1,8 @@
-
 import numpy as np
-
 import cv2
 import torch
-
-from detectron2.config import get_cfg
-from detectron2 import model_zoo
-from detectron2.engine import DefaultPredictor
-
 import onnxruntime
-
 import math
-
-import datetime
 
 
 class PreProcessing:
@@ -23,9 +13,10 @@ class PreProcessing:
         self.sample_rate = 2
         self.slowfast_alpha = 4
         self.sqn_length = self.frame_length*self.sample_rate
-        self.predictor = self.load_detectron_config()
-        self.session = self.load_onnx_session()
-        self.class_names = self.load_class_names()
+
+        self.action_model, self.boxes_model, self.action_input_names, self.action_output_names, self.box_input_names\
+            , self.box_output_names = self.load_onnx_session()
+        self.class_names = self.load_action_class_names()
         self.height, self.width, self.channel = None, None, None
         self.new_boxes = np.array([])
         self.mean = [0.45, 0.45, 0.45]
@@ -34,35 +25,23 @@ class PreProcessing:
         self.pred_labels = None
         self.palette = np.random.randint(64, 128, (len(self.class_names), 3)).tolist()
         self.preds = np.array([])
-        self.input_name = self.session.get_inputs()[0].name
-        self.input_name2 = self.session.get_inputs()[1].name
-        self.input_name3 = self.session.get_inputs()[2].name
-        self.output_name = self.session.get_outputs()[0].name
-        self.midframe_resized = np.array([])
-        self.midframe = np.array([])
 
     @staticmethod
     def load_onnx_session():
-        model = onnxruntime.InferenceSession(r"model_dynamic.onnx")
-        return model
+        action = onnxruntime.InferenceSession(r"model.onnx")
+        boxes = onnxruntime.InferenceSession(r"FasterRCNN-10.onnx")
+        action_input_name = [i.name for i in action.get_inputs()]
+        action_output_name = [i.name for i in action.get_outputs()]
+        boxes_input_name = [i.name for i in boxes.get_inputs()]
+        boxes_output_name = [i.name for i in boxes.get_outputs()]
+        return action, boxes, action_input_name, action_output_name, boxes_input_name, boxes_output_name
 
     @staticmethod
-    def load_class_names():
+    def load_action_class_names():
         path_to_csv = "ava.names"
         with open(path_to_csv) as f:
             labels = f.read().split('\n')[:-1]
         return labels
-
-    @staticmethod
-    def load_detectron_config():
-        cfg = get_cfg()
-        cfg.merge_from_file("faster_rcnn_R_50_FPN_3x.yaml")
-        cfg.MODEL.ROI_HEADS.SCORE_THRESH_TEST = 0.55  # set threshold for this model
-        cfg.MODEL.WEIGHTS = model_zoo.get_checkpoint_url("COCO-Detection/faster_rcnn_R_50_FPN_3x.yaml")
-        predictor = DefaultPredictor(cfg)
-        dummy = np.zeros((480,640,3))
-        dummy = predictor(dummy)
-        return predictor
 
     @staticmethod
     def scale(size, image):
@@ -153,10 +132,10 @@ class PreProcessing:
         return slow_pathway.to(self.device).cpu().detach().numpy(), fast_pathway.to(self.device).cpu().detach().numpy()
 
     def save_frames(self, frame):
-        if len(self.saved_frames) == self.sqn_length/2:
-            self.midframe_resized = cv2.resize(frame, (640, 480), cv2.INTER_AREA)
-            self.midframe = frame
-        frame = cv2.resize(frame, (640, 480), cv2.INTER_AREA)
+        if len(self.saved_frames) == int(self.sqn_length/2):
+            self.new_boxes = self.boxes(frame)
+            if len(self.new_boxes) == 0:
+                self.clear_frame_space()
         frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
         frame = self.scale(256, frame)
         self.saved_frames.append(frame)
@@ -167,58 +146,58 @@ class PreProcessing:
     def clear_frame_space(self):
         self.saved_frames = []
 
-    def boxes(self, frame, resized=True):
-        self.height, self.width, self.channel = frame.shape
-        outputs = self.predictor(frame)
-        fields = outputs["instances"]._fields
-        pred_classes = fields["pred_classes"]
-        selection_mask = pred_classes == 0
-        # acquire person boxes
-        pred_boxes = fields["pred_boxes"].tensor[selection_mask]
-        boxes = self.scale_boxes(self.crop_size,
-                                          pred_boxes,
-                                          self.height,
-                                          self.width).to(self.device)
-        empty = torch.zeros((boxes.shape[0], 1)).to(self.device)
-        empty = [empty, boxes]
-        boxes = torch.cat(empty, dim=1)
-        boxes = boxes.cpu().detach().numpy()
-        if not resized:
-            ratio = np.min(
-                [self.height, self.width]
-            ) / 256
-            ori_size_boxes = boxes[:, 1:] * ratio
-            self.new_boxes = ori_size_boxes
-            return None
-        return boxes
+    @staticmethod
+    def boxes_preprocess(image):
+        # Resize
+        ratio = 800.0 / min(image.shape[0], image.shape[1])
+        image = cv2.resize(image, (int(ratio * image.shape[1]), int(ratio * image.shape[0])), cv2.INTER_LINEAR).astype(
+            "float32")
+
+        # HWC -> CHW
+        image = np.transpose(image, [2, 0, 1])
+        # Normalize
+        mean_vec = np.array([102.9801, 115.9465, 122.7717])
+        for i in range(image.shape[0]):
+            image[i, :, :] = image[i, :, :] - mean_vec[i]
+
+        # Pad to be divisible of 32
+        import math
+        padded_h = int(math.ceil(image.shape[1] / 32) * 32)
+        padded_w = int(math.ceil(image.shape[2] / 32) * 32)
+
+        padded_image = np.zeros((3, padded_h, padded_w), dtype=np.float32)
+        padded_image[:, :image.shape[1], :image.shape[2]] = image
+        image = padded_image
+
+        return image
+
+    def boxes(self, frame, threshold=0.8):
+        img_data = self.boxes_preprocess(frame)
+        output = self.boxes_model.run(output_names=self.box_output_names, input_feed={self.box_input_names[0]: img_data})
+        ratio = 800.0 / min(frame.shape[0], frame.shape[1])
+        mask = (output[2] > threshold) & (output[1] == 1)
+        out = (output[0][mask]/ratio)
+        n = len(out)
+        if n == 0:
+            return out
+        out = np.concatenate((np.zeros((n, 1)), out), axis=1).astype("float32")
+        self.new_boxes = out
+        return out
 
     def action_recognition(self, frame):
         self.save_frames(frame)
         if self.check_save_frames():
-            start = datetime.datetime.now()
             slow, fast = self.preprocess(self.saved_frames)
             # chose mid point to extract boxes, can use start of clip / end of clip / any point of the clip
-            boxes = self.boxes(self.midframe_resized, resized=True)
-
-            time = datetime.datetime.now() - start
-            print(time.total_seconds())
-
-            self.boxes(self.midframe, resized=False)
-
-            time = datetime.datetime.now() - start
-            print(time.total_seconds())
-
             self.clear_frame_space()
-            if boxes.size != 0:
-                output = self.session.run([self.output_name], {self.input_name: slow, self.input_name2: fast, self.input_name3: boxes})
-                self.preds = np.array(output[0])
+            output = self.action_model.run(self.action_output_names,
+                                           {self.action_input_names[0]: slow,
+                                            self.action_input_names[1]: fast,
+                                            self.action_input_names[2]: self.new_boxes})
+            self.preds = np.array(output[0])
+            self.result()
 
-                time = datetime.datetime.now() - start
-                print(time.total_seconds())
-
-                self.result()
-
-    def result(self, confidence=0.7):
+    def result(self, confidence=0.5):
         if self.preds.size != 0:
             pred_masks = self.preds > confidence
             label_ids = [np.nonzero(pred_mask)[0] for pred_mask in pred_masks]
@@ -232,8 +211,8 @@ class PreProcessing:
     def draw_box_on_frame(self, frame):
         if self.new_boxes.size != 0 and self.pred_labels is not None:
             for box, box_labels in zip(self.new_boxes.astype(int), self.pred_labels):
-                cv2.rectangle(frame, tuple(box[:2]), tuple(box[2:]), (0, 255, 0), thickness=2)
-                label_origin = box[:2]
+                cv2.rectangle(frame, tuple(box[1:3]), tuple(box[3:]), (0, 255, 0), thickness=2)
+                label_origin = box[1:3]
                 for o,label in enumerate(box_labels):
                     label_origin[-1] -= 5
                     (label_width, label_height), _ = cv2.getTextSize(label, cv2.FONT_HERSHEY_SIMPLEX, .5, 2)
