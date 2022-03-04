@@ -8,11 +8,9 @@ from detectron2.config import get_cfg
 from detectron2 import model_zoo
 from detectron2.engine import DefaultPredictor
 
-from slowfast.datasets import cv2_transform
-from slowfast.datasets.cv2_transform import scale
-
 import onnxruntime
 
+import math
 
 class PreProcessing:
     def __init__(self):
@@ -55,13 +53,70 @@ class PreProcessing:
     @staticmethod
     def load_detectron_config():
         cfg = get_cfg()
-        cfg.merge_from_file("faster_rcnn_R_50_FPN_3x.yaml")
+        cfg.merge_from_file(model_zoo.get_config_file("COCO-Detection/faster_rcnn_R_50_FPN_3x.yaml"))
         cfg.MODEL.ROI_HEADS.SCORE_THRESH_TEST = 0.55  # set threshold for this model
         cfg.MODEL.WEIGHTS = model_zoo.get_checkpoint_url("COCO-Detection/faster_rcnn_R_50_FPN_3x.yaml")
         predictor = DefaultPredictor(cfg)
         dummy = np.zeros((480,640,3))
         dummy = predictor(dummy)
         return predictor
+
+    @staticmethod
+    def scale(size, image):
+        """
+        Scale the short side of the image to size.
+        Args:
+            size (int): size to scale the image.
+            image (array): image to perform short side scale. Dimension is
+                `height` x `width` x `channel`.
+        Returns:
+            (ndarray): the scaled image with dimension of
+                `height` x `width` x `channel`.
+        """
+        height = image.shape[0]
+        width = image.shape[1]
+        if (width <= height and width == size) or (
+                height <= width and height == size
+        ):
+            return image
+        new_width = size
+        new_height = size
+        if width < height:
+            new_height = int(math.floor((float(height) / width) * size))
+        else:
+            new_width = int(math.floor((float(width) / height) * size))
+        img = cv2.resize(
+            image, (new_width, new_height), interpolation=cv2.INTER_LINEAR
+        )
+        return img.astype(np.float32)
+
+    @staticmethod
+    def scale_boxes(size, boxes, height, width):
+        """
+        Scale the short side of the box to size.
+        Args:
+            size (int): size to scale the image.
+            boxes (ndarray): bounding boxes to peform scale. The dimension is
+            `num boxes` x 4.
+            height (int): the height of the image.
+            width (int): the width of the image.
+        Returns:
+            boxes (ndarray): scaled bounding boxes.
+        """
+        if (width <= height and width == size) or (
+                height <= width and height == size
+        ):
+            return boxes
+
+        new_width = size
+        new_height = size
+        if width < height:
+            new_height = int(math.floor((float(height) / width) * size))
+            boxes *= float(new_height) / height
+        else:
+            new_width = int(math.floor((float(width) / height) * size))
+            boxes *= float(new_width) / width
+        return boxes
 
     def preprocess(self, frames):
         # The mean value of the video raw pixels across the R G B channels.
@@ -100,7 +155,7 @@ class PreProcessing:
             self.midframe = frame
         frame = cv2.resize(frame, (640, 480), cv2.INTER_AREA)
         frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-        frame = scale(256, frame)
+        frame = self.scale(256, frame)
         self.saved_frames.append(frame)
 
     def check_save_frames(self):
@@ -117,7 +172,7 @@ class PreProcessing:
         selection_mask = pred_classes == 0
         # acquire person boxes
         pred_boxes = fields["pred_boxes"].tensor[selection_mask]
-        boxes = cv2_transform.scale_boxes(self.crop_size,
+        boxes = self.scale_boxes(self.crop_size,
                                           pred_boxes,
                                           self.height,
                                           self.width).to(self.device)
@@ -140,7 +195,6 @@ class PreProcessing:
             slow, fast = self.preprocess(self.saved_frames)
             # chose mid point to extract boxes, can use start of clip / end of clip / any point of the clip
             boxes = self.boxes(self.midframe_resized, resized=True)
-            print(self.midframe_resized.shape)
             self.boxes(self.midframe, resized=False)
             self.clear_frame_space()
             if boxes.size != 0:
