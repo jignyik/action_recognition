@@ -7,7 +7,7 @@ Tested on Python 3.9 in a conda enviroment
     pip install onnxruntime 
     .
 
-Download pre-trained model and placed in ./action_recognition/<model files>
+Download pre-trained model and placed in ./action_recognition/model_files_here
     
     
     https://drive.google.com/file/d/1RhKkC-Mxh1xglutSvDDWyKMCiArzjxM9/view?usp=sharing 
