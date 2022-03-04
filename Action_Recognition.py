@@ -13,22 +13,19 @@ class PreProcessing:
         self.sample_rate = 2
         self.slowfast_alpha = 4
         self.sqn_length = self.frame_length*self.sample_rate
-
         self.action_model, self.boxes_model, self.action_input_names, self.action_output_names, self.box_input_names\
             , self.box_output_names = self.load_onnx_session()
         self.class_names = self.load_action_class_names()
-        self.height, self.width, self.channel = None, None, None
         self.new_boxes = np.array([])
         self.mean = [0.45, 0.45, 0.45]
         self.std = [0.225, 0.225, 0.225]
-        self.crop_size = 256
         self.pred_labels = None
         self.palette = np.random.randint(64, 128, (len(self.class_names), 3)).tolist()
         self.preds = np.array([])
 
     @staticmethod
     def load_onnx_session():
-        action = onnxruntime.InferenceSession(r"model.onnx")
+        action = onnxruntime.InferenceSession(r"SlowFast_32x2_R101_50_50.onnx")
         boxes = onnxruntime.InferenceSession(r"FasterRCNN-10.onnx")
         action_input_name = [i.name for i in action.get_inputs()]
         action_output_name = [i.name for i in action.get_outputs()]
@@ -89,9 +86,6 @@ class PreProcessing:
                 height <= width and height == size
         ):
             return boxes
-
-        new_width = size
-        new_height = size
         if width < height:
             new_height = int(math.floor((float(height) / width) * size))
             boxes *= float(new_height) / height
@@ -120,14 +114,11 @@ class PreProcessing:
         # Sample frames for the fast pathway.
         index = torch.linspace(0, inputs.shape[2] - 1, self.frame_length).long()
         fast_pathway = torch.index_select(inputs, 2, index)
-        # logger.info('fast_pathway.shape={}'.format(fast_pathway.shape))
 
         # Sample frames for the slow pathway.
         index = torch.linspace(0, fast_pathway.shape[2] - 1,
                                fast_pathway.shape[2] // self.slowfast_alpha).long()
         slow_pathway = torch.index_select(fast_pathway, 2, index)
-        # logger.info('slow_pathway.shape={}'.format(slow_pathway.shape))
-        inputs = [slow_pathway.to(self.device), fast_pathway.to(self.device)]
 
         return slow_pathway.to(self.device).cpu().detach().numpy(), fast_pathway.to(self.device).cpu().detach().numpy()
 

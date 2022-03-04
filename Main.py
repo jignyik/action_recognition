@@ -8,11 +8,11 @@ cv2.ocl.setUseOpenCL(False)
 action = PreProcessing()
 while cam:
     _, frame = cam.read()
+    frame = cv2.flip(frame, 1)
     start = datetime.datetime.now()
     action.action_recognition(frame)
     time = datetime.datetime.now() - start
     if time.total_seconds() > 1:
-        pass
         print(action.result())
         print("Inference Time:")
         print(time.total_seconds())
